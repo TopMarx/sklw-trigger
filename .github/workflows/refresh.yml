@@ -34,10 +34,13 @@ on:
 permissions:
   contents: read
 
-# Overlapping ticks queue behind the running one instead of executing
-# concurrently - concurrent capture passes would multiply the request rate
-# against the FPL API. cancel-in-progress stays false so a queued manual run
-# is never silently dropped.
+# Overlapping ticks never execute concurrently - concurrent capture passes
+# would multiply the request rate against the FPL API. cancel-in-progress
+# stays false so the RUNNING pass is never killed mid-flight. Note GitHub
+# keeps at most one PENDING run per group: a newer tick replaces a run that
+# is still queued (visible as "canceled" in the Actions UI), so a manual
+# dispatch queued behind a long pass can be displaced by the next scheduled
+# tick - re-run it if it matters.
 concurrency:
   group: refresh-tick
   cancel-in-progress: false

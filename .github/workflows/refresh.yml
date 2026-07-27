@@ -1,0 +1,79 @@
+# Intraday tick for the SKLW refresh endpoint.
+#
+# This repo exists only to fire GET $SKLW_URL/api/cron/refresh on a schedule.
+# The route is fully self-gating: an idle tick returns in under a second and
+# the route - not this scheduler - decides whether any work (picks capture,
+# live refresh, confirmed pass) is actually due. So the schedule can stay dumb.
+
+name: Refresh tick
+
+on:
+  schedule:
+    # GitHub Actions cron is best-effort: at peak load ticks are routinely
+    # delayed (up to ~15 minutes) and occasionally skipped entirely. That is
+    # acceptable here because the route decides what work is due - a late tick
+    # simply does that work a few minutes later.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Refresh mode passed to the route"
+        type: choice
+        default: auto
+        options:
+          - auto
+          - capture
+          - live
+          - confirmed
+          - bootstrap
+      force:
+        description: "Add force=1 (bypass the route's due-work gates)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# Overlapping ticks queue behind the running one instead of executing
+# concurrently - concurrent capture passes would multiply the request rate
+# against the FPL API. cancel-in-progress stays false so a queued manual run
+# is never silently dropped.
+concurrency:
+  group: refresh-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Call /api/cron/refresh
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          SKLW_URL: ${{ vars.SKLW_URL }}
+          # inputs.* is empty on schedule events; fall back to the defaults.
+          MODE: ${{ inputs.mode || 'auto' }}
+          FORCE: ${{ inputs.force || 'false' }}
+        run: |
+          # Graceful no-op until the operator has configured the repo: a red
+          # run every 5 minutes would be pure noise before setup is done.
+          if [ -z "${CRON_SECRET}" ] || [ -z "${SKLW_URL}" ]; then
+            echo "::notice::CRON_SECRET secret and/or SKLW_URL variable not set - skipping. See README.md for the two setup commands."
+            exit 0
+          fi
+
+          # The secret travels only in the Authorization header - never in the
+          # URL, the query string, or the log output.
+          url="${SKLW_URL}/api/cron/refresh?mode=${MODE}"
+          if [ "${FORCE}" = "true" ]; then
+            url="${url}&force=1"
+          fi
+
+          echo "GET ${url}"
+          # --fail-with-body: non-2xx fails the run (visible in the Actions UI)
+          # but still prints the route's error JSON. --max-time 330 outlasts the
+          # route's 300s maxDuration while staying inside timeout-minutes: 6.
+          curl --fail-with-body -sS --max-time 330 \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -w '\nHTTP %{http_code} in %{time_total}s\n' \
+            "${url}"

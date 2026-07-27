@@ -1,0 +1,31 @@
+# GitHub disables scheduled workflows in repos with no activity for 60 days,
+# and this repo never changes by design. A monthly empty commit counts as
+# activity and keeps the refresh tick alive.
+#
+# The push uses the built-in GITHUB_TOKEN, and pushes made with GITHUB_TOKEN
+# do not trigger other workflows - so this cannot recurse and cannot fire
+# refresh.yml.
+
+name: Keepalive
+
+on:
+  schedule:
+    # Monthly; odd minute to avoid GitHub's top-of-hour cron congestion.
+    - cron: "23 4 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Empty commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "keepalive: monthly activity so scheduled workflows stay enabled"
+          git push
